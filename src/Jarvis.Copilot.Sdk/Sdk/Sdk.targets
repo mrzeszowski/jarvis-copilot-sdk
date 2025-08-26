@@ -1,0 +1,62 @@
+<Project>
+    <!-- Determine default enablement and destination folder -->
+    <PropertyGroup>
+        <!-- Allow opting out from a project via <CopilotInstructionsEnabled>false</CopilotInstructionsEnabled> -->
+        <CopilotInstructionsEnabled Condition="'$(CopilotInstructionsEnabled)' == ''">true</CopilotInstructionsEnabled>
+
+    <!-- A user-overridable property to force the repository root if auto-detection fails -->
+    <CopilotRepositoryRoot Condition="'$(CopilotRepositoryRoot)' == ''"></CopilotRepositoryRoot>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <!-- The file is packaged alongside this targets file in the NuGet Sdk under the Sdk/ folder -->
+        <CopilotInstructionsToCopy Include="$(MSBuildThisFileDirectory)copilot-instructions.md" />
+    </ItemGroup>
+
+    <!-- Determine repository root once per build -->
+    <Target Name="DetermineCopilotRepositoryRoot" DependsOnTargets="" BeforeTargets="CopyCopilotInstructions">
+        <!-- Start with a sensible working directory for git: prefer solution directory when available -->
+        <PropertyGroup>
+            <_CopilotWorkDir Condition="'$(SolutionDir)' != ''">$(SolutionDir)</_CopilotWorkDir>
+            <_CopilotWorkDir Condition="'$(_CopilotWorkDir)' == ''">$(MSBuildProjectDirectory)</_CopilotWorkDir>
+        </PropertyGroup>
+
+        <!-- Try Git first to get the repo root -->
+        <Exec Condition="'$(CopilotRepositoryRoot)' == ''" Command="git rev-parse --show-toplevel" ConsoleToMSBuild="true" IgnoreExitCode="true" WorkingDirectory="$(_CopilotWorkDir)">
+            <Output TaskParameter="ConsoleOutput" ItemName="_CopilotGitRootLines" />
+            <Output TaskParameter="ExitCode" PropertyName="_CopilotGitExitCode" />
+        </Exec>
+
+        <PropertyGroup>
+            <_CopilotGitRoot>@(_CopilotGitRootLines->'%(Identity)')</_CopilotGitRoot>
+            <!-- Use Git result when available -->
+            <CopilotRepositoryRoot Condition="'$(CopilotRepositoryRoot)' == '' and '$(_CopilotGitExitCode)' == '0' and '$(_CopilotGitRoot)' != ''">$(_CopilotGitRoot)</CopilotRepositoryRoot>
+            <!-- Fallback: if SolutionDir looks like a repo (has .git), use it -->
+            <CopilotRepositoryRoot Condition="'$(CopilotRepositoryRoot)' == '' and '$(SolutionDir)' != '' and Exists('$(SolutionDir)/.git')">$(SolutionDir)</CopilotRepositoryRoot>
+            <!-- Last-chance fallback: if project directory looks like a repo (has .git), use it -->
+            <CopilotRepositoryRoot Condition="'$(CopilotRepositoryRoot)' == '' and Exists('$(MSBuildProjectDirectory)/.git')">$(MSBuildProjectDirectory)</CopilotRepositoryRoot>
+        </PropertyGroup>
+
+        <!-- Compute destination folder once root is known -->
+        <PropertyGroup>
+            <CopilotInstructionsDestinationFolder Condition="'$(CopilotInstructionsDestinationFolder)' == '' and '$(CopilotRepositoryRoot)' != ''">$([System.IO.Path]::Combine('$(CopilotRepositoryRoot)', '.github'))</CopilotInstructionsDestinationFolder>
+        </PropertyGroup>
+
+        <!-- Helpful diagnostic -->
+        <Message Importance="Low" Text="CopilotRepositoryRoot='$(CopilotRepositoryRoot)'; Destination='$(CopilotInstructionsDestinationFolder)'" />
+    </Target>
+
+    <Target Name="CopyCopilotInstructions" BeforeTargets="BeforeBuild" DependsOnTargets="DetermineCopilotRepositoryRoot" Condition="'$(CopilotInstructionsEnabled)' == 'true'">
+        <!-- Fail fast if we cannot find the repository root to prevent writing to '/.github' or similar -->
+    <Error Condition="'$(CopilotRepositoryRoot)' == ''" Text="GitHub Copilot SDK: Could not determine repository root. Set &lt;CopilotRepositoryRoot&gt; in your project/Directory.Build.props, or build inside a Git repo or with SolutionDir set." />
+        <Message Text="Copying copilot-instructions.md to '$(CopilotInstructionsDestinationFolder)'" Importance="Low" />
+        <!-- Ensure destination directory exists -->
+        <MakeDir Directories="$(CopilotInstructionsDestinationFolder)" Condition="Exists('%(CopilotInstructionsToCopy.Identity)')" />
+        <Copy
+            SourceFiles="@(CopilotInstructionsToCopy)"
+            DestinationFolder="$(CopilotInstructionsDestinationFolder)"
+            SkipUnchangedFiles="true"
+            UseHardlinksIfPossible="false"
+            Condition="Exists('%(CopilotInstructionsToCopy.Identity)')" />
+    </Target>
+</Project>
